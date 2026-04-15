@@ -1,4 +1,4 @@
-# 🧠 AI Resume Screening & Job Matching System
+#  AI Resume Screening & Job Matching System
 
 ## 📌 Overview
 
