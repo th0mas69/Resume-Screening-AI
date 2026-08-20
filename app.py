@@ -92,7 +92,7 @@ def extract_resume_text(file):
 
 def load_existing_resumes():
 
-    folder = Path("sample_resumes")
+    folder = Path("data/sample_resumes")
 
     if not folder.exists():
         return []
