@@ -1,174 +1,474 @@
-import gradio as gr
+import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
-import pdfplumber
+from pathlib import Path
 from pdfminer.high_level import extract_text
 from sentence_transformers import SentenceTransformer, util
+import tempfile
+import os
 import datetime
 
+st.set_page_config(
+    page_title="AI Resume Screening",
+    page_icon="📄",
+    layout="wide"
+)
 
+# --------------------------------------------------
+# MODEL
+# --------------------------------------------------
 
-filename = f"results_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+@st.cache_resource
+def load_model():
+    return SentenceTransformer("all-MiniLM-L6-v2")
 
-# -------------------------
-# Load model
-# -------------------------
-model = SentenceTransformer("all-MiniLM-L6-v2")
+model = load_model()
 
-# -------------------------
-# Skill list (can be extended)
-# -------------------------
+# --------------------------------------------------
+# SKILLS
+# --------------------------------------------------
+
 SKILLS = [
-    "python", "java", "sql", "machine learning", "data analysis",
-    "deep learning", "nlp", "excel", "power bi", "tableau",
-    "communication", "project management", "aws", "docker", "problem-solving", "leadership", 
-    "organization", "adapatability", "teamwork", "digital literacy", "written communication",
-    "active listening", "reporting", "documenting", "web design", "data visualization", 
-    "web design", "photo and video editing", "typography", "user interface", "user experience",
-    "Statistical analysis", "Information processing", "compliance", "microsoft office", "microsoft excel", "sheets", "powerpoint",
-    "accounting", "digital marketing", "SEO", "Game developer", "quality control", "testing", "manual QA"
+    "python",
+    "java",
+    "sql",
+    "machine learning",
+    "deep learning",
+    "nlp",
+    "data analysis",
+    "excel",
+    "power bi",
+    "tableau",
+    "aws",
+    "docker",
+    "kubernetes",
+    "tensorflow",
+    "pytorch",
+    "scikit-learn",
+    "communication",
+    "project management"
 ]
 
-# -------------------------
-# Functions
-# -------------------------
-
-def extract_resume_text(file):
-    try:
-        return extract_text(file)
-    except:
-        try:
-            with pdfplumber.open(file) as pdf:
-                return " ".join([page.extract_text() or "" for page in pdf.pages])
-        except:
-            return ""
 
 def extract_skills(text):
     text = text.lower()
-    return {s for s in SKILLS if s in text}
 
-def process(job_desc, files, filter_option):
-    if not job_desc or not files:
-        return "⚠️ Provide input", None, None
+    return {
+        skill
+        for skill in SKILLS
+        if skill.lower() in text
+    }
 
-    job_emb = model.encode(job_desc)
-    job_skills = extract_skills(job_desc)
 
-    results = []
+# --------------------------------------------------
+# PDF EXTRACTION
+# --------------------------------------------------
 
-    for file in files:
-        try:
-            text = extract_text(file.name)
-            text = extract_resume_text(file.name)
-        except:
-            text = ""
+def extract_resume_text(file):
 
-        if not text.strip():
-            continue
+    try:
+        with tempfile.NamedTemporaryFile(
+            delete=False,
+            suffix=".pdf"
+        ) as temp:
 
-        res_emb = model.encode(text)
-        sim = util.cos_sim(job_emb, res_emb).item()
+            temp.write(file.getbuffer())
+            temp_path = temp.name
 
-        res_skills = extract_skills(text)
-        overlap = len(res_skills & job_skills) / len(job_skills) if job_skills else 0
+        text = extract_text(temp_path)
 
-        results.append({
-            "Resume": file.name.split("\\")[-1],
-            "Similarity": round(sim, 3),
-            "Skill Match": round(overlap, 2),
-            "Skills Found": ", ".join(res_skills),
-            "Decision": "Selected" if sim > 0.6 else "Rejected"
-        })
+        os.remove(temp_path)
+
+        return text or ""
+
+    except Exception as e:
+        st.warning(f"Could not read {file.name}: {e}")
+        return ""
+
+
+# --------------------------------------------------
+# SAMPLE RESUMES
+# --------------------------------------------------
+
+def load_existing_resumes():
+
+    folder = Path("sample_resumes")
+
+    if not folder.exists():
+        return []
+
+    return list(folder.glob("*.pdf"))
+
+
+# --------------------------------------------------
+# MAIN SCREEN
+# --------------------------------------------------
+
+st.title("🧠 AI Resume Screening & Job Matching")
+
+st.markdown("""
+### 📌 About the System
+
+This application automatically evaluates resumes against a job
+description using Natural Language Processing.
+
+The system combines:
+
+- 🧠 Semantic similarity
+- 🛠️ Skill extraction
+- 📊 Skill overlap
+- 🏆 Candidate ranking
+- 📈 Similarity visualisation
+- 📥 CSV report generation
+""")
+
+st.divider()
+
+# --------------------------------------------------
+# JOB DESCRIPTION
+# --------------------------------------------------
+
+st.subheader("1️⃣ Job Description")
+
+job_description = st.text_area(
+    "Enter the job description",
+    height=200,
+    placeholder="Paste the job description here..."
+)
+
+# --------------------------------------------------
+# RESUMES
+# --------------------------------------------------
+
+st.subheader("2️⃣ Resumes")
+
+uploaded_files = st.file_uploader(
+    "Upload PDF resumes",
+    type=["pdf"],
+    accept_multiple_files=True
+)
+
+existing_button = st.button(
+    "📂 Use Existing Resumes"
+)
+
+existing_files = []
+
+if existing_button:
+
+    existing_files = load_existing_resumes()
+
+    if existing_files:
+        st.success(
+            f"{len(existing_files)} existing resumes loaded."
+        )
+    else:
+        st.warning(
+            "No PDFs found in sample_resumes folder."
+        )
+
+# --------------------------------------------------
+# FILTER
+# --------------------------------------------------
+
+threshold = st.slider(
+    "Minimum similarity score",
+    min_value=0.0,
+    max_value=1.0,
+    value=0.60,
+    step=0.05
+)
+
+top_n = st.selectbox(
+    "Number of candidates to display",
+    [5, 10, 20],
+    index=0
+)
+
+# --------------------------------------------------
+# ANALYZE
+# --------------------------------------------------
+
+analyze = st.button(
+    "🚀 Analyze Candidates",
+    type="primary"
+)
+
+if analyze:
+
+    if not job_description.strip():
+
+        st.error("Please enter a job description.")
+
+        st.stop()
+
+    if not uploaded_files and not existing_files:
+
+        st.error("Please upload resumes or use existing resumes.")
+
+        st.stop()
+
+    # Choose files
+    if uploaded_files:
+        resumes = uploaded_files
+    else:
+        resumes = existing_files
+
+    with st.spinner("Analysing resumes..."):
+
+        # Job embedding
+        job_embedding = model.encode(
+            job_description,
+            convert_to_tensor=True
+        )
+
+        job_skills = extract_skills(job_description)
+
+        results = []
+
+        progress = st.progress(0)
+
+        total = len(resumes)
+
+        for i, resume in enumerate(resumes):
+
+            # Extract text
+            if hasattr(resume, "getbuffer"):
+                text = extract_resume_text(resume)
+                filename = resume.name
+            else:
+                filename = resume.name
+                text = extract_text(str(resume))
+
+            if not text.strip():
+                continue
+
+            # Resume embedding
+            resume_embedding = model.encode(
+                text,
+                convert_to_tensor=True
+            )
+
+            similarity = util.cos_sim(
+                job_embedding,
+                resume_embedding
+            ).item()
+
+            # Skills
+            resume_skills = extract_skills(text)
+
+            matched_skills = (
+                job_skills &
+                resume_skills
+            )
+
+            if job_skills:
+
+                skill_match = (
+                    len(matched_skills) /
+                    len(job_skills)
+                )
+
+            else:
+
+                skill_match = 0
+
+            # Combined score
+            final_score = (
+                similarity * 0.7
+                +
+                skill_match * 0.3
+            )
+
+            results.append({
+
+                "Resume": filename,
+
+                "Similarity":
+                    round(similarity, 3),
+
+                "Skill Match":
+                    round(skill_match, 3),
+
+                "Final Score":
+                    round(final_score, 3),
+
+                "Skills Found":
+                    ", ".join(sorted(resume_skills)),
+
+                "Matched Skills":
+                    ", ".join(sorted(matched_skills))
+            })
+
+            progress.progress(
+                (i + 1) / total
+            )
+
+        progress.empty()
+
+    # --------------------------------------------------
+    # DATAFRAME
+    # --------------------------------------------------
 
     if not results:
-        return "❌ No valid resumes", None, None
-    
 
+        st.error(
+            "No readable resumes were found."
+        )
+
+        st.stop()
 
     df = pd.DataFrame(results)
-    df = df.sort_values(by="Similarity", ascending=False)
 
-    #Handle Empty case & filtering
+    df = df.sort_values(
+        "Final Score",
+        ascending=False
+    ).reset_index(drop=True)
 
-    if not df.empty and "Similarity" in df.columns:
-        if filter_option == "Top Matches Only":
-            df = df[df["Similarity"] > 0.6]
-        d
+    df.insert(
+        0,
+        "Rank",
+        range(1, len(df) + 1)
+    )
 
+    # --------------------------------------------------
+    # FILTER
+    # --------------------------------------------------
 
+    filtered_df = df[
+        df["Similarity"] >= threshold
+    ]
 
-    #Adding Filters
+    # --------------------------------------------------
+    # TOP CANDIDATE
+    # --------------------------------------------------
 
-    threshold = 0.6  # adjustable
+    st.divider()
 
-    df["Selected"] = df["Similarity"] > threshold
+    st.subheader("🏆 Top Candidate")
 
-    filtered_df = df[df["Selected"] == True]
+    top = df.iloc[0]
 
-    # Top candidate
-    top_candidate = df.iloc[0]
+    col1, col2, col3 = st.columns(3)
 
-    #Skill Match Score
+    col1.metric(
+        "Candidate",
+        top["Resume"]
+    )
 
-    df["Final Score"] = (df["Similarity"] * 0.7 + df["Skill Match"] * 0.3)
+    col2.metric(
+        "Final Score",
+        top["Final Score"]
+    )
 
-    df = df.sort_values(by="Final Score", ascending=False)
+    col3.metric(
+        "Skill Match",
+        top["Skill Match"]
+    )
 
+    # --------------------------------------------------
+    # RANKING TABLE
+    # --------------------------------------------------
 
-    # Graph
-    fig, ax = plt.subplots(figsize=(10, 5))
-    ax.barh(df["Resume"][:5], df["Similarity"][:5])
+    st.subheader("📊 Candidate Ranking")
+
+    st.dataframe(
+        filtered_df.head(top_n),
+        use_container_width=True,
+        hide_index=True
+    )
+
+    # --------------------------------------------------
+    # GRAPH
+    # --------------------------------------------------
+
+    st.subheader("📈 Similarity Graph")
+
+    graph_df = df.head(top_n).copy()
+
+    graph_df["Short Name"] = (
+        graph_df["Resume"]
+        .apply(lambda x: Path(x).name[:25])
+    )
+
+    fig, ax = plt.subplots(
+        figsize=(12, 6)
+    )
+
+    ax.barh(
+        graph_df["Short Name"],
+        graph_df["Similarity"]
+    )
+
     ax.invert_yaxis()
+
+    ax.set_xlabel(
+        "Similarity Score"
+    )
+
+    ax.set_ylabel(
+        "Candidate"
+    )
+
+    ax.set_title(
+        "Resume–Job Similarity"
+    )
+
     plt.tight_layout()
 
-    summary = f"""
-    🏆 **Top Candidate:** {top_candidate['Resume']}  
-    📊 Similarity: {top_candidate['Similarity']}  
-    🧠 Skill Match: {top_candidate['Skill Match']}
-    """
-
-
-    csv_path = "results.csv"
-    df.to_csv(csv_path, index=False)
-    return summary, df.head(5), fig, csv_path
-
-
-with gr.Blocks() as app:
-    gr.Markdown("<h2> AI Resume Screening Dashboard <h2>")
-
-    with gr.Row():
-        job_input = gr.Textbox(label="📄 Job Description", lines=6)
-
-    with gr.Row():
-        file_input = gr.File(file_count="multiple", type="file", label="📂 Upload Resumes")
-    with gr.Row():
-        file_output = gr.File(label="📥 Download Report (CSV)")
-
-    run_btn = gr.Button("🖥️ Analyze Candidates")
-
-    summary_output = gr.Markdown()
-    table_output = gr.Dataframe()
-    graph_output = gr.Plot()
-
-    filter_option = gr.Dropdown(
-    ["All Candidates", "Top Matches Only"],
-    value="All Candidates",
-    label="Filter Candidates")
-
-
-    run_btn.click(
-        process,
-        inputs=[job_input, file_input, filter_option],
-        outputs=[summary_output, table_output, graph_output, file_output]
+    st.pyplot(
+        fig,
+        use_container_width=True
     )
 
+    # --------------------------------------------------
+    # REPORT
+    # --------------------------------------------------
 
-    reset_btn = gr.Button("🔄 Clear")
-
-    reset_btn.click(
-        lambda: ("", [], "", None, None),
-        outputs=[job_input, file_input, summary_output, table_output, graph_output, file_output]
+    timestamp = datetime.datetime.now().strftime(
+        "%Y%m%d_%H%M%S"
     )
 
+    csv_filename = (
+        f"resume_screening_{timestamp}.csv"
+    )
 
-app.launch(inbrowser=True)
+    csv_data = df.to_csv(
+        index=False
+    ).encode("utf-8")
+
+    st.download_button(
+        "📥 Download CSV Report",
+        data=csv_data,
+        file_name=csv_filename,
+        mime="text/csv"
+    )
+
+    # --------------------------------------------------
+    # DETAILS
+    # --------------------------------------------------
+
+    st.subheader("🧠 Candidate Insights")
+
+    for _, row in df.head(top_n).iterrows():
+
+        with st.expander(
+            f"#{row['Rank']} — {row['Resume']}"
+        ):
+
+            st.write(
+                f"**Similarity:** {row['Similarity']}"
+            )
+
+            st.write(
+                f"**Skill Match:** {row['Skill Match']}"
+            )
+
+            st.write(
+                f"**Final Score:** {row['Final Score']}"
+            )
+
+            st.write(
+                f"**Matched Skills:** "
+                f"{row['Matched Skills']}"
+            )
