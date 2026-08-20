@@ -17,3 +17,13 @@ pdfminer.six
 matplotlib
 pandas
 reportlab
+streamlit
+pandas
+numpy
+matplotlib
+scikit-learn
+sentence-transformers
+pdfminer.six
+pdfplumber
+reportlab
+torch
